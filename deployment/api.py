@@ -1,7 +1,7 @@
 """
 FastAPI RAG server for Dubai Building Code — cloud deployment version.
-LLM  : Groq API  (set GROQ_API_KEY env var)
-Embed: Hugging Face Inference API  (set HF_API_KEY env var)
+LLM  : Groq API   (set GROQ_API_KEY env var)
+Embed: Nomic API  (set NOMIC_API_KEY env var)
 Usage: uvicorn api:app --host 0.0.0.0 --port $PORT
 """
 
@@ -27,8 +27,8 @@ GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL   = "llama-3.3-70b-versatile"
 
-HF_API_KEY   = os.environ["HF_API_KEY"]
-HF_EMBED_URL = "https://api-inference.huggingface.co/models/nomic-ai/nomic-embed-text-v1"
+NOMIC_API_KEY  = os.environ["NOMIC_API_KEY"]
+NOMIC_EMBED_URL = "https://api-atlas.nomic.ai/v1/embedding/text"
 
 TOP_K        = 5
 MIN_SCORE    = 0.45
@@ -61,18 +61,17 @@ def load_resources():
 def embed_query(text: str) -> np.ndarray:
     try:
         r = requests.post(
-            HF_EMBED_URL,
-            headers={"Authorization": f"Bearer {HF_API_KEY}"},
-            json={"inputs": f"search_query: {text}"},
+            NOMIC_EMBED_URL,
+            headers={"Authorization": f"Bearer {NOMIC_API_KEY}"},
+            json={
+                "model":     "nomic-embed-text-v1",
+                "texts":     [f"search_query: {text}"],
+                "task_type": "search_query",
+            },
             timeout=30,
         )
         r.raise_for_status()
-        data = r.json()
-        # HF feature-extraction returns [num_tokens][hidden] or [hidden] depending on model config
-        if isinstance(data[0], list):
-            vec = np.mean(data, axis=0).astype("float32")
-        else:
-            vec = np.array(data, dtype="float32")
+        vec = np.array(r.json()["embeddings"][0], dtype="float32")
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Embedding request failed: {e}")
 

@@ -8,7 +8,7 @@ The local Ollama dependency is replaced with two free cloud APIs:
 | Component | Service | Purpose |
 |-----------|---------|---------|
 | LLM | Groq | Generates answers from retrieved context |
-| Embeddings | Hugging Face Inference API | Converts questions into vectors for search |
+| Embeddings | Nomic API | Converts questions into vectors for search |
 | Hosting | Render | Runs the FastAPI server |
 
 ---
@@ -35,11 +35,11 @@ rebuilt — the HuggingFace Inference API serves the same model.
 2. Go to **API Keys** → **Create API Key**
 3. Copy the key (starts with `gsk_...`)
 
-### Hugging Face (Embeddings)
-1. Sign up at https://huggingface.co
-2. Go to **Settings → Access Tokens** → **New token**
-3. Select **Read** role — that is sufficient
-4. Copy the token (starts with `hf_...`)
+### Nomic (Embeddings)
+1. Sign up at https://atlas.nomic.ai
+2. Go to **Settings → API Keys** → **Generate API Key**
+3. Copy the key
+4. Free tier includes enough tokens for testing and light usage
 
 ---
 
@@ -77,7 +77,7 @@ Or push to an existing repo and note the folder path.
    | Key | Value |
    |-----|-------|
    | `GROQ_API_KEY` | your Groq key (`gsk_...`) |
-   | `HF_API_KEY` | your HuggingFace token (`hf_...`) |
+   | `NOMIC_API_KEY` | your Nomic API key |
 
 7. Click **Create Web Service**
 
@@ -124,8 +124,8 @@ Commit and push — Render redeploys automatically.
 ## Troubleshooting
 
 **502 Embedding request failed**
-- HuggingFace model may be loading (cold start). Wait 20s and retry.
-- Check `HF_API_KEY` is set correctly in Render environment variables.
+- Check `NOMIC_API_KEY` is set correctly in Render environment variables.
+- Verify the key is active at https://atlas.nomic.ai
 
 **502 Groq API error**
 - Check `GROQ_API_KEY` is set correctly.
