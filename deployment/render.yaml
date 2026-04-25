@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: dubai-building-code-rag
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: HF_API_KEY
+        sync: false
