@@ -10,17 +10,17 @@
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background:
-        radial-gradient(circle at top, rgba(200, 150, 42, 0.12), transparent 34%),
-        #0f1117;
-      color: #e8eaf0;
+        radial-gradient(circle at top, rgba(200, 150, 42, 0.08), transparent 34%),
+        #f4f5f7;
+      color: #1a1d27;
       height: 100vh;
       display: flex;
       flex-direction: column;
     }
 
     header {
-      background: rgba(26, 29, 39, 0.96);
-      border-bottom: 1px solid #2d3148;
+      background: rgba(255, 255, 255, 0.96);
+      border-bottom: 1px solid #dde0ea;
       padding: 16px 24px;
       display: flex;
       align-items: center;
@@ -38,18 +38,18 @@
       justify-content: center;
       font-size: 18px;
       flex-shrink: 0;
-      color: #10131a;
+      color: #fff;
     }
 
     header h1 {
       font-size: 17px;
       font-weight: 600;
-      color: #f0f2f8;
+      color: #1a1d27;
     }
 
     header p {
       font-size: 12px;
-      color: #8b91aa;
+      color: #6b7280;
       margin-top: 2px;
     }
 
@@ -58,7 +58,7 @@
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: #555;
+      background: #aaa;
       flex-shrink: 0;
     }
 
@@ -96,8 +96,8 @@
       flex-shrink: 0;
     }
 
-    .bubble-wrap.user .avatar { background: #2d3148; }
-    .bubble-wrap.bot .avatar  { background: linear-gradient(135deg, #c8962a, #e8b84b); color: #10131a; }
+    .bubble-wrap.user .avatar { background: #dde0ea; color: #1a1d27; }
+    .bubble-wrap.bot .avatar  { background: linear-gradient(135deg, #c8962a, #e8b84b); color: #fff; }
 
     .bubble {
       padding: 14px 16px;
@@ -108,25 +108,26 @@
     }
 
     .bubble-wrap.user .bubble {
-      background: #2a3580;
+      background: #4a6cf7;
+      color: #fff;
       border-bottom-right-radius: 4px;
     }
 
     .bubble-wrap.bot .bubble {
-      background: #1a1d27;
-      border: 1px solid #2d3148;
+      background: #ffffff;
+      border: 1px solid #dde0ea;
       border-bottom-left-radius: 4px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.07);
     }
 
     .answer-text {
       white-space: pre-wrap;
       word-break: break-word;
-      color: #e8eaf0;
+      color: #1a1d27;
     }
 
     .answer-text strong {
-      color: #f5f6fb;
+      color: #111318;
       font-weight: 700;
     }
 
@@ -140,10 +141,10 @@
     .source-tag {
       font-size: 11px;
       padding: 6px 10px;
-      background: #0f1117;
-      border: 1px solid #2d3148;
+      background: #f4f5f7;
+      border: 1px solid #dde0ea;
       border-radius: 12px;
-      color: #d9b15a;
+      color: #a07020;
       display: flex;
       align-items: center;
       gap: 8px;
@@ -151,11 +152,11 @@
 
     .source-label {
       font-weight: 600;
-      color: #f0d38a;
+      color: #c8962a;
     }
 
     .source-meta {
-      color: #8e94ab;
+      color: #6b7280;
     }
 
     .thinking {
@@ -168,7 +169,7 @@
       width: 7px;
       height: 7px;
       border-radius: 50%;
-      background: #7b8099;
+      background: #aab0c0;
       animation: bounce 1.2s infinite;
     }
 
@@ -187,7 +188,7 @@
       align-items: center;
       justify-content: center;
       gap: 16px;
-      color: #7b8099;
+      color: #6b7280;
       text-align: center;
       padding: 40px;
     }
@@ -206,24 +207,24 @@
 
     .suggestion {
       padding: 8px 14px;
-      background: #1a1d27;
-      border: 1px solid #2d3148;
+      background: #ffffff;
+      border: 1px solid #dde0ea;
       border-radius: 20px;
       font-size: 13px;
       cursor: pointer;
       transition: border-color 0.2s, color 0.2s, transform 0.2s;
-      color: #c8d0e0;
+      color: #3d4460;
     }
 
     .suggestion:hover {
       border-color: #c8962a;
-      color: #e8b84b;
+      color: #a07020;
       transform: translateY(-1px);
     }
 
     footer {
-      background: rgba(26, 29, 39, 0.96);
-      border-top: 1px solid #2d3148;
+      background: rgba(255, 255, 255, 0.96);
+      border-top: 1px solid #dde0ea;
       padding: 16px 24px;
       backdrop-filter: blur(10px);
     }
@@ -238,11 +239,11 @@
 
     textarea {
       flex: 1;
-      background: #0f1117;
-      border: 1px solid #2d3148;
+      background: #f4f5f7;
+      border: 1px solid #dde0ea;
       border-radius: 12px;
       padding: 12px 16px;
-      color: #e8eaf0;
+      color: #1a1d27;
       font-size: 14px;
       resize: none;
       min-height: 48px;
@@ -254,7 +255,7 @@
     }
 
     textarea:focus { border-color: #c8962a; }
-    textarea::placeholder { color: #555; }
+    textarea::placeholder { color: #aab0c0; }
 
     button#send {
       width: 48px;
@@ -271,7 +272,7 @@
     }
 
     button#send:disabled { opacity: 0.4; cursor: not-allowed; }
-    button#send svg { width: 20px; height: 20px; fill: #0f1117; }
+    button#send svg { width: 20px; height: 20px; fill: #fff; }
 
     @media (max-width: 720px) {
       #chat { padding: 18px 14px; }
@@ -287,7 +288,7 @@
   <div class="logo">&#127959;</div>
   <div>
     <h1>Dubai Building Code Assistant</h1>
-    <p>Answers grounded in the official DBC document</p>
+    <p>Answers grounded in the <a href="https://dda.gov.ae/-/media/Project/TECOM/Media/DDA/Planning-and-development/Design/pdf/Dubai-Building-Code_English_2021-Edition.pdf" target="_blank" rel="noopener" style="color:#c8962a;text-decoration:none;">official DBC document</a></p>
   </div>
   <div id="status-dot" title="API status"></div>
 </header>
