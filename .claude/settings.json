@@ -33,7 +33,8 @@
       "Bash(ping -n 8 127.0.0.1)",
       "Bash(curl -s -X POST http://localhost:8004/ask -H \"Content-Type: application/json\" -d \"{\\\\\"question\\\\\": \\\\\"what are the requirements for bedrooms?\\\\\"}\")",
       "Bash(curl -s -X POST http://localhost:8000/ask -H \"Content-Type: application/json\" -d \"{\\\\\"question\\\\\": \\\\\"what is the requirements for bedrooms?\\\\\"}\")",
-      "Bash(python -m json.tool)"
+      "Bash(python -m json.tool)",
+      "Bash(curl -s -X POST https://chatwithdubaibuildingcode.onrender.com/ask -H \"Content-Type: application/json\" -d \"{\\\\\"question\\\\\": \\\\\"minimum bedroom size?\\\\\"}\" --max-time 60 -w \"\\\\n\\\\nHTTP status: %{http_code}\\\\nTotal time: %{time_total}s\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\ibrah\\.claude\\projects\\c--Users-ibrah-Desktop-Devops-ChatWithDubaiBuildingCode\\memory"

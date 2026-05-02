@@ -5,4 +5,3 @@ numpy
 requests
 pydantic>=2.9.0
 rank-bm25
-flashrank

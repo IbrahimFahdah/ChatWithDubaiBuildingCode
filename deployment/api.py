@@ -5,9 +5,9 @@ Embed: Nomic API  (set NOMIC_API_KEY env var)
 Usage: uvicorn api:app --host 0.0.0.0 --port $PORT
 
 Retrieval pipeline:
-  prose_pool  FAISS + BM25 → FlashRank cross-encoder rerank   → top PROSE_K
-  fact_pool   FAISS + BM25 + section overlap + intent boost    → top FACT_K
-  late_fuse   deduplicate + per-section diversity cap          → LLM context
+  prose_pool  FAISS + BM25 hybrid → top PROSE_K
+  fact_pool   FAISS + BM25 + section overlap + intent boost → top FACT_K
+  late_fuse   deduplicate + per-section diversity cap        → LLM context
 """
 
 import os
@@ -23,7 +23,6 @@ import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from flashrank import Ranker, RerankRequest
 from pydantic import BaseModel
 from rank_bm25 import BM25Okapi
 
@@ -68,9 +67,8 @@ async def lifespan(app: FastAPI):
 
     app.state.prose_indices = [i for i, _ in prose_docs]
     app.state.fact_indices  = [i for i, _ in fact_docs]
-    app.state.prose_bm25    = _build_bm25(prose_docs)
-    app.state.fact_bm25     = _build_bm25(fact_docs)
-    app.state.reranker      = Ranker(model_name="ms-marco-MiniLM-L-12-v2", max_length=512)
+    app.state.prose_bm25 = _build_bm25(prose_docs)
+    app.state.fact_bm25  = _build_bm25(fact_docs)
 
     print(
         f"Loaded {app.state.index.ntotal} vectors "
@@ -179,19 +177,8 @@ def retrieve_prose(question: str, vec: np.ndarray) -> list[dict]:
             continue
         fused[meta_idx] = 0.65 * v + 0.35 * b
 
-    candidates = [
-        app.state.meta[i]
-        for i in sorted(fused, key=fused.get, reverse=True)[:CANDIDATE_K]
-    ]
-    if not candidates:
-        return []
-
-    passages = [{"id": i, "text": c["text"]} for i, c in enumerate(candidates)]
-    results  = app.state.reranker.rerank(RerankRequest(query=question, passages=passages))
-    return [
-        {"score": round(float(r["score"]), 4), **candidates[r["id"]]}
-        for r in results[:PROSE_K]
-    ]
+    top = sorted(fused, key=fused.get, reverse=True)[:PROSE_K]
+    return [{"score": round(fused[i], 4), **app.state.meta[i]} for i in top]
 
 
 def retrieve_facts(question: str, vec: np.ndarray) -> list[dict]:
