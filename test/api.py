@@ -146,10 +146,6 @@ def _fact_boost(q_tokens: set[str], chunk: dict) -> float:
     boost = min(0.35, 0.07 * sum(1 for s in positive if s in haystack))
     if "minimum" in (chunk.get("section") or "").lower():
         boost += 0.12
-    # Penalise occupancy-load tables when the query is about physical dimensions
-    negative = {"population", "occupancy", "rate", "estimation"}
-    if not (q_tokens & negative) and any(t in haystack for t in negative):
-        boost -= 0.30
     return boost
 
 

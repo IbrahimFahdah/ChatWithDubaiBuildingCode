@@ -9,56 +9,72 @@ You type: "What is the minimum ceiling height?"
             1. EMBED THE QUERY
             nomic-embed-text converts your question
             into a 768-number vector
-            (search_query: "What is the minimum...")
+            (prefix: "search_query: ...")
+                    │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+    2a. PROSE POOL        2b. FACT POOL
+    Text paragraphs       Table rows rendered
+    and descriptions      as natural language
+          │                   │
+    FAISS vector search   FAISS vector search
+    + BM25 keyword        + BM25 keyword
+    fused 65/35           fused 60/25
+          │                   │
+    Filter weak           Filter weak
+    candidates            candidates
+          │                   │
+    FlashRank             Section title overlap
+    cross-encoder         bonus + normative
+    rerank → top 3        language boost → top 3
+    (test only)           scores normalised 0–1
+          │                   │
+          └─────────┬─────────┘
+                    ▼
+            3. LATE FUSION
+            Facts listed first (they carry exact values)
+            Deduplicate by chunk ID
+            Cap at 2 chunks per section (diversity)
+            → up to 6 chunks total
                     │
                     ▼
-            2. VECTOR SEARCH (FAISS)
-            Your query vector is compared against
-            all chunk vectors in index.faiss
-            using cosine similarity → top 30 candidates
+            4. SECTION EXPANSION
+            Each retrieved chunk is expanded to include
+            all sibling chunks in the same section,
+            ordered by page number
                     │
                     ▼
-            3. BM25 KEYWORD SEARCH
-            Simultaneously, your question words are
-            matched against chunk text using BM25
-            (like a smart keyword search) → top 30 candidates
-                    │
-                    ▼
-            4. FUSION SCORING
-            Both results are merged:
-            score = 0.65 × vector_score + 0.35 × bm25_score
-            Low-scoring chunks filtered out (< threshold)
-            → top 5 chunks selected
-                    │
-                    ▼
-            5. CHUNK EXPANSION
-            For each top chunk, the full surrounding
-            section is pulled in (all chunks with the
-            same section label, e.g. "B.4.2.2 Building height")
-                    │
-                    ▼
-            6. MERGE OVERLAPPING TEXT
+            5. MERGE OVERLAPPING TEXT
             Adjacent chunks from the same section
             are stitched together, deduplicating
             any overlapping words
                     │
                     ▼
-            7. BUILD PROMPT
-            The merged text blocks are formatted
-            into a structured prompt with instructions
-            telling the LLM to cite sections and
-            not invent numbers
+            6. BUILD PROMPT
+            Merged text blocks formatted with strict
+            instructions: cite sections, bullet points,
+            no invented numbers
                     │
                     ▼
-            8. LLM INFERENCE (Ollama / gemma4:e4b)
-            The prompt is sent to your local model
-            which generates the answer
+            7. LLM INFERENCE
+            Ollama → gemma4:e4b (test)
+            Groq  → llama-3.3-70b-versatile (deployment)
+            temperature 0.1, 512 tokens
                     │
                     ▼
-            9. RESPONSE
-            Answer text + source list
-            (section, page range, score) → back to you
+            8. RESPONSE
+            Answer text + sources
+            (section, page range, score, chunk_type)
 ```
+
+## Two Chunk Types
+
+| Type | Source | Example |
+|------|--------|---------|
+| `text` | Prose paragraphs from the PDF | "Habitable rooms shall have a minimum ceiling height of..." |
+| `fact` | One table row rendered as a sentence | "For residential living space: minimum area 10.5 m² and minimum dimension 3 m. [B.5.2, Table B.3]" |
+
+Facts are retrieved through a separate pool with no cross-encoder reranking — the vector + BM25 + section overlap scoring is better suited to structured data than a prose-trained cross-encoder.
 
 ## Key Point
 
@@ -70,12 +86,12 @@ present in those excerpts.
 
 | File | Role |
 |------|------|
-| `index.faiss` | Stores all chunk vectors (built once by `build_index.py`) |
-| `index_meta.pkl` | Stores chunk text + metadata (section, page) alongside each vector |
-| `api.py` | Runs steps 1–9 on every `/ask` request |
+| `index.faiss` | 4,440 chunk vectors built via Colab (nomic-embed-text-v1) |
+| `index_meta.pkl` | Chunk text + metadata (section, page, chunk_type, table, subject) |
+| `api.py` | Runs the full pipeline on every `/ask` request |
 
 ## Important: Embedding Model Must Match
 
-`index.faiss` was built using **nomic-embed-text**. Queries must be embedded with
-the same model, otherwise the vectors are in different spaces and results will be
-wrong. The model is pulled via `ollama pull nomic-embed-text`.
+`index.faiss` was built using **nomic-embed-text-v1**. Queries must be embedded
+with the same model — the local Ollama `nomic-embed-text` and the Nomic API
+`nomic-embed-text-v1` produce compatible vectors.
