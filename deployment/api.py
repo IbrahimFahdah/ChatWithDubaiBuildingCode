@@ -1,62 +1,102 @@
 """
-FastAPI RAG server for Dubai Building Code — cloud deployment version.
+FastAPI RAG server — Dubai Building Code (cloud deployment).
 LLM  : Groq API   (set GROQ_API_KEY env var)
 Embed: Nomic API  (set NOMIC_API_KEY env var)
 Usage: uvicorn api:app --host 0.0.0.0 --port $PORT
+
+Retrieval pipeline:
+  prose_pool  FAISS + BM25 → FlashRank cross-encoder rerank   → top PROSE_K
+  fact_pool   FAISS + BM25 + section overlap + intent boost    → top FACT_K
+  late_fuse   deduplicate + per-section diversity cap          → LLM context
 """
 
 import os
 import pickle
 import re
 import textwrap
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import faiss
 import numpy as np
 import requests
-from rank_bm25 import BM25Okapi
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from flashrank import Ranker, RerankRequest
+from pydantic import BaseModel
+from rank_bm25 import BM25Okapi
 
-INDEX_PATH   = Path(__file__).parent / "index.faiss"
-META_PATH    = Path(__file__).parent / "index_meta.pkl"
+# ── Config ────────────────────────────────────────────────────────────────────
+
+INDEX_PATH = Path(__file__).parent / "index.faiss"
+META_PATH  = Path(__file__).parent / "index_meta.pkl"
 
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL   = "llama-3.3-70b-versatile"
 
-NOMIC_API_KEY  = os.environ["NOMIC_API_KEY"]
+NOMIC_API_KEY   = os.environ["NOMIC_API_KEY"]
 NOMIC_EMBED_URL = "https://api-atlas.nomic.ai/v1/embedding/text"
 
-TOP_K        = 5
-MIN_SCORE    = 0.45
+CANDIDATE_K     = 80   # FAISS candidates per pool
+PROSE_K         = 3
+FACT_K          = 3
+MAX_PER_SECTION = 2    # diversity cap
 
-app = FastAPI(title="Dubai Building Code RAG API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_REQUIREMENT_TERMS = {
+    "requirement", "requirements", "required", "require",
+    "rule", "rules", "criteria", "standard", "standards",
+    "minimum", "minimums",
+}
 
 
-@app.on_event("startup")
-def load_resources():
+# ── App startup ───────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     if not INDEX_PATH.exists() or not META_PATH.exists():
-        raise RuntimeError("Index not found. Copy index.faiss and index_meta.pkl into this folder.")
+        raise RuntimeError("Index files not found. Copy index.faiss and index_meta.pkl into this folder.")
 
     app.state.index = faiss.read_index(str(INDEX_PATH))
     with open(META_PATH, "rb") as f:
         app.state.meta = pickle.load(f)
     app.state.id_to_index = {c["id"]: i for i, c in enumerate(app.state.meta)}
 
-    tokenized = [re.findall(r"\w+", c["text"].lower()) for c in app.state.meta]
-    app.state.bm25 = BM25Okapi(tokenized)
-    print(f"Loaded {app.state.index.ntotal} vectors + BM25 index. Ready.")
+    prose_docs = [(i, c) for i, c in enumerate(app.state.meta) if c.get("chunk_type") == "text"]
+    fact_docs  = [(i, c) for i, c in enumerate(app.state.meta) if c.get("chunk_type") == "fact"]
 
+    app.state.prose_indices = [i for i, _ in prose_docs]
+    app.state.fact_indices  = [i for i, _ in fact_docs]
+    app.state.prose_bm25    = _build_bm25(prose_docs)
+    app.state.fact_bm25     = _build_bm25(fact_docs)
+    app.state.reranker      = Ranker(model_name="ms-marco-MiniLM-L-12-v2", max_length=512)
+
+    print(
+        f"Loaded {app.state.index.ntotal} vectors "
+        f"({len(app.state.prose_indices)} prose, {len(app.state.fact_indices)} fact). Ready."
+    )
+    yield
+
+
+app = FastAPI(title="Dubai Building Code RAG API", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _build_bm25(docs: list[tuple[int, dict]]) -> BM25Okapi | None:
+    if not docs:
+        return None
+    return BM25Okapi([re.findall(r"\w+", c["text"].lower()) for _, c in docs])
+
+
+def _vector_scores(vec: np.ndarray, k: int) -> dict[int, float]:
+    scores, indices = app.state.index.search(vec, min(k, app.state.index.ntotal))
+    return {int(idx): float(s) for s, idx in zip(scores[0], indices[0]) if idx >= 0}
+
+
+# ── Embedding ─────────────────────────────────────────────────────────────────
 
 def embed_query(text: str) -> np.ndarray:
     try:
@@ -73,151 +113,221 @@ def embed_query(text: str) -> np.ndarray:
         r.raise_for_status()
         vec = np.array(r.json()["embeddings"][0], dtype="float32")
     except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Embedding request failed: {e}")
+        raise HTTPException(502, f"Embedding request failed: {e}")
 
     norm = np.linalg.norm(vec)
     if norm <= 1e-9:
-        raise HTTPException(status_code=500, detail="Embedding model returned a zero vector.")
+        raise HTTPException(500, "Embedding returned a zero vector.")
     return (vec / norm).reshape(1, -1)
 
 
-def retrieve(question: str, k: int = TOP_K):
-    k = max(1, min(int(k), len(app.state.meta)))
+# ── Query expansion ───────────────────────────────────────────────────────────
 
-    vec = embed_query(question)
-    search_k = min(k * 6, len(app.state.meta))
-    v_scores, v_indices = app.state.index.search(vec, search_k)
-    vector_scores: dict[int, float] = {
-        int(idx): float(score)
-        for score, idx in zip(v_scores[0], v_indices[0])
-        if int(idx) >= 0
-    }
+def _expand_tokens(question: str) -> list[str]:
+    tokens = re.findall(r"\w+", question.lower())
+    expanded = list(tokens)
+    for t in tokens:
+        if t.endswith("ies") and len(t) > 4:
+            expanded.append(f"{t[:-3]}y")
+        elif t.endswith("s") and len(t) > 3:
+            expanded.append(t[:-1])
+    if set(tokens) & _REQUIREMENT_TERMS:
+        expanded.extend([
+            "shall", "required", "minimum", "not", "less", "than",
+            "area", "dimension", "dimensions", "size", "sizes",
+            "clearance", "height", "width",
+        ])
+    return expanded
 
-    tokens   = re.findall(r"\w+", question.lower())
-    bm25_raw = app.state.bm25.get_scores(tokens)
-    bm25_norm = bm25_raw / (float(bm25_raw.max()) or 1.0)
 
-    bm25_top   = set(int(i) for i in np.argsort(bm25_norm)[::-1][:k * 6])
-    candidates = set(vector_scores) | bm25_top
+# ── Retrieval ─────────────────────────────────────────────────────────────────
+
+def _fact_boost(q_tokens: set[str], chunk: dict) -> float:
+    """Intent-based score adjustment for fact chunks."""
+    if not (q_tokens & _REQUIREMENT_TERMS):
+        return 0.0
+    haystack = f"{(chunk.get('section') or '')} {chunk['text']}".lower()
+    positive = [
+        "shall", "minimum", "not less than", "required", "requirement",
+        "requirements", "conform", "provided", "clearance", "dimension",
+        "area", "height", "width",
+    ]
+    boost = min(0.35, 0.07 * sum(1 for s in positive if s in haystack))
+    if "minimum" in (chunk.get("section") or "").lower():
+        boost += 0.12
+    # Penalise occupancy-load tables when the query is about physical dimensions
+    negative = {"population", "occupancy", "rate", "estimation"}
+    if not (q_tokens & negative) and any(t in haystack for t in negative):
+        boost -= 0.30
+    return boost
+
+
+def retrieve_prose(question: str, vec: np.ndarray) -> list[dict]:
+    if not app.state.prose_indices or not app.state.prose_bm25:
+        return []
+
+    v_scores = _vector_scores(vec, CANDIDATE_K * 2)
+    tokens   = _expand_tokens(question)
+    bm25_raw = app.state.prose_bm25.get_scores(tokens)
+    bm25_max = float(bm25_raw.max()) or 1.0
 
     fused: dict[int, float] = {}
-    for i in candidates:
-        v = vector_scores.get(i, 0.0)
-        b = float(bm25_norm[i])
-        if v < MIN_SCORE and b < 0.4:
+    for pos, meta_idx in enumerate(app.state.prose_indices):
+        v = v_scores.get(meta_idx, 0.0)
+        b = float(bm25_raw[pos]) / bm25_max
+        if v < 0.40 and b < 0.30:
             continue
-        fused[i] = 0.65 * v + 0.35 * b
+        fused[meta_idx] = 0.65 * v + 0.35 * b
 
-    top_idx = sorted(fused, key=fused.get, reverse=True)[:k]
+    candidates = [
+        app.state.meta[i]
+        for i in sorted(fused, key=fused.get, reverse=True)[:CANDIDATE_K]
+    ]
+    if not candidates:
+        return []
 
-    seen, extra = set(top_idx), []
-    for i in top_idx:
-        nxt = i + 1
-        if nxt < len(app.state.meta) and nxt not in seen:
-            if app.state.meta[nxt]["page_start"] <= app.state.meta[i]["page_end"] + 1:
-                extra.append(nxt)
-                seen.add(nxt)
-
-    all_idx = sorted(set(top_idx) | set(extra), key=lambda i: (app.state.meta[i]["page_start"], i))
-    return [{**app.state.meta[i], "score": round(fused.get(i, 0), 4)} for i in all_idx]
+    passages = [{"id": i, "text": c["text"]} for i, c in enumerate(candidates)]
+    results  = app.state.reranker.rerank(RerankRequest(query=question, passages=passages))
+    return [
+        {"score": round(float(r["score"]), 4), **candidates[r["id"]]}
+        for r in results[:PROSE_K]
+    ]
 
 
-def strip_section_prefix(text: str, section: str | None) -> str:
-    if not section:
-        return text.strip()
+def retrieve_facts(question: str, vec: np.ndarray) -> list[dict]:
+    if not app.state.fact_indices or not app.state.fact_bm25:
+        return []
+
+    v_scores = _vector_scores(vec, CANDIDATE_K * 2)
+    tokens   = _expand_tokens(question)
+    bm25_raw = app.state.fact_bm25.get_scores(tokens)
+    bm25_max = float(bm25_raw.max()) or 1.0
+    q_tokens = set(tokens)
+
+    fused: dict[int, float] = {}
+    for pos, meta_idx in enumerate(app.state.fact_indices):
+        v = v_scores.get(meta_idx, 0.0)
+        b = float(bm25_raw[pos]) / bm25_max
+        if v < 0.40 and b < 0.20:
+            continue
+        section       = (app.state.meta[meta_idx].get("section") or "").lower()
+        section_bonus = min(0.15, sum(1 for t in q_tokens if len(t) > 3 and t in section) * 0.05)
+        fused[meta_idx] = (
+            0.60 * v + 0.25 * b + section_bonus
+            + _fact_boost(q_tokens, app.state.meta[meta_idx])
+        )
+
+    top = sorted(fused, key=fused.get, reverse=True)[:FACT_K]
+    return [{"score": round(fused[i], 4), **app.state.meta[i]} for i in top]
+
+
+def late_fuse(prose: list[dict], facts: list[dict]) -> list[dict]:
+    seen: set[int] = set()
+    section_count: dict[str, int] = {}
+    final: list[dict] = []
+    for chunk in facts + prose:   # facts first — they carry the precise values
+        cid     = chunk.get("id")
+        section = chunk.get("section") or ""
+        if cid in seen or section_count.get(section, 0) >= MAX_PER_SECTION:
+            continue
+        seen.add(cid)
+        section_count[section] = section_count.get(section, 0) + 1
+        final.append(chunk)
+    return final
+
+
+def retrieve(question: str) -> list[dict]:
+    vec = embed_query(question)
+    return late_fuse(retrieve_prose(question, vec), retrieve_facts(question, vec))
+
+
+# ── Prompt construction ───────────────────────────────────────────────────────
+
+def _strip_section_prefix(text: str, section: str | None) -> str:
     prefix = f"[{section}] "
-    return text[len(prefix):].strip() if text.startswith(prefix) else text.strip()
+    return text[len(prefix):].strip() if section and text.startswith(prefix) else text.strip()
 
 
-def merge_overlapping_text(left: str, right: str, max_overlap_words: int = 80) -> str:
-    left_words  = left.split()
-    right_words = right.split()
-    max_overlap = min(len(left_words), len(right_words), max_overlap_words)
-    for size in range(max_overlap, 0, -1):
-        if left_words[-size:] == right_words[:size]:
-            return " ".join(left_words + right_words[size:])
+def _merge_overlapping(left: str, right: str, max_overlap: int = 80) -> str:
+    lw, rw = left.split(), right.split()
+    n = min(len(lw), len(rw), max_overlap)
+    for size in range(n, 0, -1):
+        if lw[-size:] == rw[:size]:
+            return " ".join(lw + rw[size:])
     return f"{left} {right}".strip()
 
 
-def merge_chunks_for_prompt(chunks: list[dict]) -> list[dict]:
+def _expand_to_section(chunks: list[dict]) -> list[dict]:
+    """Expand each retrieved chunk to all siblings in the same section."""
+    expanded: set[int] = set()
+    for chunk in chunks:
+        idx = app.state.id_to_index.get(chunk["id"])
+        if idx is None:
+            continue
+        section = app.state.meta[idx].get("section")
+        expanded.add(idx)
+        if not section:
+            continue
+        i = idx - 1
+        while i >= 0 and app.state.meta[i].get("section") == section:
+            expanded.add(i); i -= 1
+        i = idx + 1
+        while i < len(app.state.meta) and app.state.meta[i].get("section") == section:
+            expanded.add(i); i += 1
+    ordered = sorted(expanded, key=lambda i: (app.state.meta[i]["page_start"], i))
+    return [{**app.state.meta[i], "score": 0.0} for i in ordered]
+
+
+def _merge_for_prompt(chunks: list[dict]) -> list[dict]:
     if not chunks:
         return []
-    merged: list[dict] = []
-    current = None
+    merged, current = [], None
     for chunk in chunks:
-        chunk_text = strip_section_prefix(chunk["text"], chunk.get("section"))
-        if current and chunk.get("section") == current.get("section"):
-            current["text"]       = merge_overlapping_text(current["text"], chunk_text)
+        text = _strip_section_prefix(chunk["text"], chunk.get("section"))
+        if current and chunk.get("section") == current["section"]:
+            current["text"]       = _merge_overlapping(current["text"], text)
             current["page_start"] = min(current["page_start"], chunk.get("page_start") or current["page_start"])
             current["page_end"]   = max(current["page_end"],   chunk.get("page_end")   or current["page_end"])
-            current["source_count"] += 1
             continue
         if current:
             merged.append(current)
         current = {
-            "section":      chunk.get("section"),
-            "page_start":   chunk.get("page_start"),
-            "page_end":     chunk.get("page_end"),
-            "text":         chunk_text,
-            "source_count": 1,
+            "section":    chunk.get("section"),
+            "page_start": chunk.get("page_start"),
+            "page_end":   chunk.get("page_end"),
+            "text":       text,
         }
     if current:
         merged.append(current)
     return merged
 
 
-def expand_chunks_for_prompt(chunks: list[dict]) -> list[dict]:
-    if not chunks:
-        return []
-    expanded_idx: set[int] = set()
-    for chunk in chunks:
-        idx = app.state.id_to_index.get(chunk["id"])
-        if idx is None:
-            continue
-        section = app.state.meta[idx].get("section")
-        expanded_idx.add(idx)
-        if not section:
-            continue
-        prev_idx = idx - 1
-        while prev_idx >= 0 and app.state.meta[prev_idx].get("section") == section:
-            expanded_idx.add(prev_idx)
-            prev_idx -= 1
-        next_idx = idx + 1
-        while next_idx < len(app.state.meta) and app.state.meta[next_idx].get("section") == section:
-            expanded_idx.add(next_idx)
-            next_idx += 1
-    ordered_idx = sorted(expanded_idx, key=lambda i: (app.state.meta[i]["page_start"], i))
-    return [{**app.state.meta[i], "score": 0.0} for i in ordered_idx]
-
-
-def build_prompt(question: str, chunks: list) -> str:
+def build_prompt(question: str, chunks: list[dict]) -> str:
     if not chunks:
         return (
             f"Question: {question}\n"
-            "Answer: The Dubai Building Code sections retrieved are not relevant enough "
-            "to answer this question accurately. Please rephrase or ask about a specific section."
+            "Answer: The retrieved sections are not relevant enough to answer this question accurately."
         )
-    prompt_chunks  = expand_chunks_for_prompt(chunks)
-    merged_chunks  = merge_chunks_for_prompt(prompt_chunks)
-    context_parts  = []
-    for i, c in enumerate(merged_chunks, 1):
+    merged = _merge_for_prompt(_expand_to_section(chunks))
+    context_parts = []
+    for i, c in enumerate(merged, 1):
         label = f"Section {c['section']}" if c["section"] else f"Pages {c['page_start']}-{c['page_end']}"
         context_parts.append(f"[{i}] {label}\n{c['text'].strip()}")
     context = "\n\n".join(context_parts)
     return textwrap.dedent(f"""
         You are an expert on the Dubai Building Code.
-        The excerpts below are from the PDF and may be fragmented due to multi-column or table formatting - read every line carefully.
+        The excerpts below are from the PDF and may be fragmented due to multi-column or table formatting — read every line carefully.
+
         Instructions:
         - Start with a short direct answer when possible.
-        - Then present the supporting requirements as short bullet points.
-        - If the excerpts cover different sections or rule sets, keep them separate.
-        - Extract and present ALL relevant requirements found across ALL excerpts, including every row of any table.
-        - If you see a table with rows like "Studio: 1 bay", "1 Bedroom: 1 bay" etc., list every row.
+        - Present supporting requirements as short bullet points.
+        - If excerpts cover different sections, keep them separate.
+        - Extract ALL relevant requirements across ALL excerpts, including every table row.
         - Use ONLY information explicitly stated in the excerpts.
         - Do NOT invent numbers, thresholds, or requirements not present in the text.
         - If the excerpts do not answer the question, say "This specific requirement is not covered in the retrieved sections."
         - Cite the section number or page at the end of every bullet or statement.
-        - Prefer plain language, but preserve technical wording when it matters for compliance.
+        - Preserve technical wording when it matters for compliance.
 
         --- Dubai Building Code Excerpts ---
         {context}
@@ -228,13 +338,15 @@ def build_prompt(question: str, chunks: list) -> str:
     """).strip()
 
 
+# ── LLM ──────────────────────────────────────────────────────────────────────
+
 def call_llm(prompt: str) -> str:
     try:
         r = requests.post(
             GROQ_URL,
             headers={
                 "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
+                "Content-Type":  "application/json",
             },
             json={
                 "model":       GROQ_MODEL,
@@ -245,17 +357,18 @@ def call_llm(prompt: str) -> str:
             timeout=60,
         )
         if not r.ok:
-            raise HTTPException(status_code=502, detail=f"Groq API error ({r.status_code}): {r.text.strip()}")
+            raise HTTPException(502, f"Groq API error ({r.status_code}): {r.text.strip()}")
         return r.json()["choices"][0]["message"]["content"].strip()
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(500, str(e))
 
+
+# ── Schemas & routes ──────────────────────────────────────────────────────────
 
 class AskRequest(BaseModel):
     question: str
-    top_k: int = Field(default=TOP_K, ge=1, le=50)
 
 
 class SourceChunk(BaseModel):
@@ -264,6 +377,7 @@ class SourceChunk(BaseModel):
     page_start: int | None
     page_end: int | None
     score: float
+    chunk_type: str | None
 
 
 class AskResponse(BaseModel):
@@ -274,18 +388,20 @@ class AskResponse(BaseModel):
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest):
     if not req.question.strip():
-        raise HTTPException(status_code=400, detail="Question cannot be empty.")
-    chunks = retrieve(req.question, k=req.top_k)
+        raise HTTPException(400, "Question cannot be empty.")
+    chunks = retrieve(req.question)
     if not chunks:
         return AskResponse(
-            answer="No sufficiently relevant sections found in the Dubai Building Code for this question. Try rephrasing.",
+            answer="No sufficiently relevant sections found for this question. Try rephrasing.",
             sources=[],
         )
-    prompt = build_prompt(req.question, chunks)
-    answer = call_llm(prompt)
+    answer = call_llm(build_prompt(req.question, chunks))
     return AskResponse(
         answer=answer,
-        sources=[SourceChunk(**{k: v for k, v in c.items() if k != "text"}) for c in chunks],
+        sources=[
+            SourceChunk(**{k: v for k, v in c.items() if k in SourceChunk.model_fields})
+            for c in chunks
+        ],
     )
 
 

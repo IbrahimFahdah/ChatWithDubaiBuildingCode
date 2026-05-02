@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(python -c ' *)",
+      "Bash(python build_chunks.py)",
+      "Bash(curl -s http://localhost:11434/api/tags)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(m['name']\\) for m in d.get\\('models',[]\\)]\")",
+      "Bash(curl -s http://localhost:11434/)",
+      "Bash(python build_index.py)",
+      "Bash(uvicorn api:app --port 8000)",
+      "Bash(ping -n 4 127.0.0.1)",
+      "Bash(curl -s -X POST http://localhost:8000/ask -H \"Content-Type: application/json\" -d \"{\\\\\"question\\\\\": \\\\\"what are the requirements for bedrooms?\\\\\"}\")",
+      "Bash(taskkill /F /IM uvicorn.exe)",
+      "Bash(taskkill /F /IM python.exe /FI \"WINDOWTITLE eq uvicorn*\")",
+      "Bash(netstat -ano)",
+      "Bash(findstr :8000)",
+      "Bash(taskkill /PID 8424 /F)",
+      "PowerShell(Stop-Process -Id 8424 -Force)",
+      "PowerShell(Test-NetConnection -ComputerName localhost -Port 8000 -WarningAction SilentlyContinue)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Start-Sleep -Seconds 2; Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue)",
+      "PowerShell($pid8000 = \\(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess; if \\($pid8000\\) { Stop-Process -Id $pid8000 -Force; Write-Host \"Killed PID $pid8000\" } else { Write-Host \"Port 8000 is free\" }; Start-Sleep -Seconds 3; Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue)",
+      "PowerShell($pid8000 = \\(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess; if \\($pid8000\\) { Stop-Process -Id $pid8000 -Force; Write-Host \"Killed PID $pid8000\"; Start-Sleep -Seconds 2 } else { Write-Host \"Port 8000 is free\" })",
+      "PowerShell($conn = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if \\($conn\\) { $p = Get-Process -Id $conn.OwningProcess; Write-Host \"Still listening: PID=$\\($conn.OwningProcess\\) Name=$\\($p.Name\\)\"; $p | Stop-Process -Force } else { Write-Host \"Port 8000 is free\" })",
+      "Bash(uvicorn api:app --port 8001)",
+      "Bash(ping -n 5 127.0.0.1)",
+      "Bash(curl -s -X POST http://localhost:8001/ask -H \"Content-Type: application/json\" -d \"{\\\\\"question\\\\\": \\\\\"what are the requirements for bedrooms?\\\\\"}\")",
+      "Bash(uvicorn api:app --port 8002)",
+      "Bash(curl -s -X POST http://localhost:8002/ask -H \"Content-Type: application/json\" -d \"{\\\\\"question\\\\\": \\\\\"what are the requirements for bedrooms?\\\\\"}\")",
+      "Bash(uvicorn api:app --port 8003)",
+      "Bash(curl -s -X POST http://localhost:8003/ask -H \"Content-Type: application/json\" -d \"{\\\\\"question\\\\\": \\\\\"what are the requirements for bedrooms?\\\\\"}\")",
+      "Bash(uvicorn api:app --port 8004)",
+      "Bash(ping -n 8 127.0.0.1)",
+      "Bash(curl -s -X POST http://localhost:8004/ask -H \"Content-Type: application/json\" -d \"{\\\\\"question\\\\\": \\\\\"what are the requirements for bedrooms?\\\\\"}\")",
+      "Bash(curl -s -X POST http://localhost:8000/ask -H \"Content-Type: application/json\" -d \"{\\\\\"question\\\\\": \\\\\"what is the requirements for bedrooms?\\\\\"}\")",
+      "Bash(python -m json.tool)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\ibrah\\.claude\\projects\\c--Users-ibrah-Desktop-Devops-ChatWithDubaiBuildingCode\\memory"
+    ]
+  }
+}
