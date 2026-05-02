@@ -205,7 +205,8 @@ def retrieve_facts(question: str, vec: np.ndarray) -> list[dict]:
         )
 
     top = sorted(fused, key=fused.get, reverse=True)[:FACT_K]
-    return [{"score": round(fused[i], 4), **app.state.meta[i]} for i in top]
+    max_score = fused[top[0]] if top else 1.0
+    return [{"score": round(fused[i] / max_score, 4), **app.state.meta[i]} for i in top]
 
 
 def late_fuse(prose: list[dict], facts: list[dict]) -> list[dict]:
